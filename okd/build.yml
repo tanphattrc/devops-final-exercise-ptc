@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Template
+metadata:
+  name: petclinic-build
+labels:
+  app.kubernetes.io/name: petclinic-ptc
+  app.kubernetes.io/instance: petclinic-ptc-main
+  app.kubernetes.io/part-of: petclinic-ptc
+objects:
+  - apiVersion: build.openshift.io/v1
+    kind: BuildConfig
+    metadata:
+      name: petclinic-ptc
+    spec:
+      output:
+        pushSecret:
+          name: artifactory
+        to:
+          kind: DockerImage
+          name: prj-elcavn-training-docker.artifactory.svc.elca.ch/devops-final-exercise-ptc/petclinic-ptc:latest
+      source:
+        type: Binary
+      strategy:
+        type: Docker
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "2Gi"
+        limits:
+          cpu: "4"
+          memory: "4Gi"

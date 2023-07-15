@@ -1,0 +1,85 @@
+#!/usr/bin/env groovy
+properties([
+        buildDiscarder(logRotator(numToKeepStr: '5', artifactNumToKeepStr: '5')),
+        disableConcurrentBuilds(),
+        [$class: 'JobPropertyImpl', throttle: [count: 5, durationName: 'hour', userBoost: true]], // Max number of builds per branch and per hour
+        parameters([
+                booleanParam(name: 'SKIP_TEST', defaultValue: false, description: 'Skip the unit tests stage')
+        ])
+])
+
+timeout(time: 1, unit: 'HOURS') {
+    timestamps {
+        elcaPodTemplates.base {
+            elcaPodTemplates.maven([tag: '3.8-eclipse-temurin-8']) {
+                elcaPodTemplates.oc {
+                    node(POD_LABEL) {
+                        elcaStage.cleanWorkspace()
+                        elcaStage.gitCheckout()
+
+                        stageSetupEnv()
+
+                        container('maven') {
+                            stage('Build') {
+                                withMaven() {
+                                    echo "Building maven artefacts and docker images ${params.SKIP_TEST ? 'without' : 'with'} unit testing ..."
+                                    sh 'mvn clean install ' + (params.SKIP_TEST ? ' -DskipTests' : '')
+                                }
+                            }
+//                            stage('Run SonarQube Analysis') {
+//                                elcaSonarqube.analyzeWithMaven([
+//                                        'sonar.projectKey'  : 'prj_elcavn-tech-training:devops-dotnet3',
+//                                        'sonar.projectName' : 'devops-training',
+//                                        'sonar.ldap.project': 'prj_elcavn-tech-training',
+//                                ])
+//                            }
+                        }
+
+                        container('oc') {
+                            elcaOKDLib = elcaOKDLoader.load()
+                            openshift.withCluster() {
+                                openshift.withProject('prj-elcavn-training-devops-ptc') {
+                                    stage('Build Docker Image') {
+                                        fileOperations([
+                                                fileCopyOperation(includes: 'target/*.war', targetLocation: './docker', flattenFiles: true)
+                                        ])
+                                        openshift.apply(
+                                                openshift.process(
+                                                        readFile('./okd/build.yml')
+                                                )
+                                        )
+                                        elcaOKDLib.buildAndWaitForCompletion('petclinic-ptc', '--from-dir ./docker')
+                                    }
+
+                                    stage('Deploy Application') {
+                                        openshift.apply(
+                                                openshift.process(
+                                                        readFile('./okd/deploy.yml'),
+                                                        '-p', "CONTAINER_ID=${new Date().format("yyyyMMddHHmmssS", TimeZone.getTimeZone('UTC'))}",
+                                                )
+                                        )
+                                        elcaOKDLib.waitForDeploymentCompletion('petclinic-ptc')
+                                    }
+                                }
+                            }
+                        }
+
+                        container('maven') {
+                            stage('Run SonarQube Analysis') {
+                                withMaven() {
+                                    sh "mvn sonar:sonar -Dsonar.host.url=http://sonarqube-prj-elcavn-training-ptc.apps.okd.svc.elca.ch -Dsonar.login=admin -Dsonar.password=khang123"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+def stageSetupEnv() {
+    stage("Setup env") {
+        env.MAVEN_OPTS = "-Xmx1G"
+    }
+}
